@@ -1,3 +1,4 @@
+import sys
 import json
 import pandas as pd
 import requests
@@ -5,7 +6,6 @@ import re
 import csv
 from abc import ABC, abstractmethod
 from datetime import date, timedelta
-from itertools import islice
 import spacy
 from spacy.matcher import Matcher
 from spacy import util
@@ -16,11 +16,14 @@ def main():
     # book_onetime = onetime_book('onetime.csv')
     # book_recurring = recurring_book('recurring.csv')
     # book_savings = savings_book('savings.csv')
-    # book_onetime.book_modifier()
-    # book_recurring.book_modifier()
-    # book_savings.book_modifier()
+    # book_onetime.book_writer()
+    # book_recurring.book_writer()
+    # book_savings.book_writer()
     #print(get_bond_yields())
-    tx_parser("TransactionHistory_2023-Mar-Jul.csv")
+    bank_record = Bank_record()
+    bank_record = Statement_analyzer("TransactionHistory_2023-Mar-Jul.csv").analyze()
+    print(bank_record)
+    print(bank_record.sum())
 
 class Book(ABC):
     def __init__(self, col_ext: list, filepath: str):
@@ -62,7 +65,7 @@ class Book(ABC):
     def bookdata(self, bookdata):
         self._bookdata = bookdata
 
-    def book_modifier(self) -> None:
+    def book_writer(self) -> None:
         """
             A interface for user to edit the book items
 
@@ -139,40 +142,126 @@ class Savings_book(Book):
         print("Rainy day fund, ", end='')
         return self.get_col1()
 
-def tx_parser(filepath):
-    nlp = spacy.load("en_core_web_sm")
-    matcher = Matcher(nlp.vocab, validate=True)
-    item_patterns = [[{"POS": "ADJ", "OP": "*"}, {"POS": {"IN": ["NOUN", "PROPN"]}, "OP": "+"}]]
-    matcher.add("ITEM_PATTERN", item_patterns)
-    with open(filepath) as file:
-        reader = csv.DictReader(islice(file, 5, None))
+class Bank_record:
+    def __init__(self):
+        self.record = {}
+    
+    def __getitem__(self, key):
+        if key not in self.record:
+            self.record[key] = 0    # Initialize the key if it doesn't exist
+        return self.record[key]
+    
+    def __setitem__(self, key, value):
+        self.record[key] = value
+
+    def __str__(self):
+        return json.dumps(self.record, indent=2)
+    
+    def sort(self):
+        self.record = dict(sorted(self.record.items()))
+        return self
+    
+    def sum(self):
+        return sum(self.record.values())
+
+class Statement_analyzer:
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.bank_record = Bank_record()
+
+        # setup regex
+        self.tx_regex = {}
+        # re_prefix match example 1: "25/07/23  xx-9296 BUS/MRT"            pattern: "(?:[0-9]{2}/[0-9]{2}/[0-9]{2} +)?(?:xx-[0-9]{4} +)?"
+        # re_prefix match example 2: "OTHR - "
+        self.tx_regex['prefix'] = r"(?:[0-9]{2}/[0-9]{2}/[0-9]{2} +)?(?:xx-[0-9]{4} +|OTHR - +|[0-9]{5}\w+)?"
+        # re_suffix match example 1: "              P 05/03/23 USD 15.30"   pattern: "(?: *(?:[A-Z]) *?)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)"
+        # re_suffix match example 2: "       S 06/03/23"                    pattern: "(?: *(?:[A-Z]) *?)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)"
+        # re_suffix match example 3: "           N  PWS FOOD"               pattern: "( +[A-Z] +.*)?"
+        # re_suffix match example 4: " 297532059        S"
+        self.tx_regex['suffix'] = r"[0-9]*(?:(?: *(?:[A-Z]) *)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)| +[A-Z] +.*)?$"
         
-        for row in reader:
-            tx_category = row['Description']
-            if (withdrawal:=row['Withdrawals (SGD)']):
-                print(f"{tx_category}, {withdrawal}", end=' ') 
-            elif (deposit:= row['Deposits (SGD)']):
-                print(f"{tx_category}, {deposit}", end=' ') 
-            row = reader.__next__()
-            # re_prefix match example 1: "25/07/23  xx-9296 BUS/MRT", pattern: "(?:[0-9]{2}/[0-9]{2}/[0-9]{2} +)?(?:xx-[0-9]{4} +)?"
-            # re_prefix match example 2: "OTHR - "
-            re_prefix = r"(?:[0-9]{2}/[0-9]{2}/[0-9]{2} +)?(?:xx-[0-9]{4} +|OTHR - +)?"
-            # re_suffix match example 1: "              P 05/03/23 USD 15.30", pattern: "(?: *(?:[A-Z]) *?)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)"
-            # re_suffix match example 1: "       S 06/03/23", pattern: "(?: *(?:[A-Z]) *?)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)"
-            # re_suffix match example 2: "           N  PWS FOOD", pattern: "( +[A-Z] +.*)?"
-            re_suffix = r"(?:(?: *(?:[A-Z]) *)?(?:[0-9]{2}/[0-9]{2}/[0-9]{2}.*)| +[A-Z] +.*)?$"
-            re_matches = re.search(re_prefix+r"(.+?)"+re_suffix, row['Description'])
-            if re_matches:
-                print(re_matches.group(1))
-                doc = nlp(re_matches.group(1))
-                matches = matcher(doc, as_spans=True)
-                filtered = util.filter_spans(matches)
-                #print("Noun phrases:", matches)
-                print("Noun phrases:", filtered)
-            else:
-                print("No matches")
+        # setup spacy
+        self.nlp = spacy.load("en_core_web_sm")
+        self.matcher = Matcher(self.nlp.vocab, validate=True)
+        #item_patterns = [[{"POS": "ADJ", "OP": "*"}, {"POS": {"IN": ["NOUN", "PROPN"]}, "OP": "+"}]]
+        item_patterns = [[{"ENT_TYPE": {"NOT_IN": ["LAW", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL", "CARDINAL"]}, "OP": "+"}]]
+        self.matcher.add("ITEM_PATTERN", item_patterns)
+        
+    @property
+    def filepath(self):
+        return self._filepath
+    
+    @filepath.setter
+    def filepath(self, filepath):
+        self._filepath = filepath
+
+    def tx_reader(self):
+        """
+            convert the transaction history csv file into a list of dict
+        """
+        with open(self.filepath) as file:
+            for line in file:
+                if line.split(',')[0].strip() == 'Transaction History':
+                    break
             
-            #doc = nlp(row['Description'])
+            bank_record =[]
+            reader = csv.DictReader(file)
+            for row in reader:
+                bank_record.append({row['Transaction date'], })
+            ...
+
+    def analyze(self):
+        with open(self.filepath) as file:
+            for line in file:
+                if line.split(',')[0].strip() == 'Transaction History':
+                    break
+           
+            reader = csv.DictReader(file)
+            cat, amount = None, None
+            for row in reader:
+                cat, amount = self.tx_sorter(row, cat, amount)
+            if amount:
+                self.bank_record[self.description_parser(cat)] += amount    # add the last transaction if the last row is the first row of a transaction
+            
+            return self.bank_record.sort()
+
+    def tx_sorter(self, row, prev_cat=None, prev_amount=None):
+        """
+            Sort the transaction into different categories
+        """
+        try:
+            # if amount_str is not empty, then the row is the first row of a transaction
+            if (amount_str := '-'+row['Withdrawals (SGD)'] if (row['Withdrawals (SGD)']) else None) or (amount_str := row['Deposits (SGD)']):
+                # Storing the first row
+                tx_category = row['Description']
+                amount = float(amount_str.replace(',',''))
+                # look back to previous row to see if the previous transaction has second row. 
+                # (The second row of a transaction is the row without the amount)
+                if prev_amount:
+                    self.bank_record[self.description_parser(prev_cat)] += prev_amount # if no second row, use categroy as key for the bank_record
+                return tx_category, amount
+            else:
+                prev_detail = row['Description']
+                self.bank_record[self.description_parser(prev_detail)] += prev_amount
+                return None, None
+        except ValueError:
+            sys.exit("Invalid float value in the Withdrawal/Deposits column")
+
+    def description_parser(self, tx_detail):
+        re_matches = re.search(self.tx_regex['prefix']+r"(.+?)"+self.tx_regex['suffix'], tx_detail)
+        if re_matches:
+            #print(re_matches.group(1))
+            doc = self.nlp(re_matches.group(1))
+            matches = self.matcher(doc, as_spans=True)
+            filtered = util.filter_spans(matches)
+            item_name = ""
+            for word in filtered:
+                item_name += word.text + " "
+        
+        if (item := item_name.strip()) == "":
+            sys.exit("No item name found")
+        return item
+
 
 def get_bond_yields():
     base_url = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service'
