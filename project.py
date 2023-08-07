@@ -20,10 +20,11 @@ def main():
     # book_recurring.book_writer()
     # book_savings.book_writer()
     #print(get_bond_yields())
-    bank_record = Bank_record()
-    bank_record = Statement_analyzer("TransactionHistory_2023-Mar-Jul.csv").analyze()
-    print(bank_record)
-    print(bank_record.sum())
+    bank_records = Bank_records()
+    bank_records = Statement_analyzer("TransactionHistory_2023-Mar-Jul.csv").reader()
+    print(bank_records)
+    print(json.dumps(bank_records.sum_by_category(),indent=2))
+    print(json.dumps(bank_records.monthly_cf_bef_inv(),indent=2))
 
 class Book(ABC):
     def __init__(self, col_ext: list, filepath: str):
@@ -142,32 +143,74 @@ class Savings_book(Book):
         print("Rainy day fund, ", end='')
         return self.get_col1()
 
-class Bank_record:
+class Bank_records:
     def __init__(self):
-        self.record = {}
-    
+        # key: month, value: list of dict, each dict is a transaction
+        # could be access by bank_record[month]
+        self._records = {}
+
     def __getitem__(self, key):
-        if key not in self.record:
-            self.record[key] = 0    # Initialize the key if it doesn't exist
-        return self.record[key]
+        if key not in self._records:
+            self._records[key] = []    # Initialize the key if it doesn't exist
+        return self._records[key]
     
-    def __setitem__(self, key, value):
-        self.record[key] = value
+    def __setitem__(self, key, lst):
+        self._records[key] = lst
+
+    def append(self, key, tx):
+        self._records[key].append(tx)
 
     def __str__(self):
-        return json.dumps(self.record, indent=2)
+        string = ""
+        for month in self._records:
+            for tx in self._records[month]:
+                string += f"month: {month:<2} date: {tx['date'].isoformat():<12} amount: {tx['amount']:<15} name: {tx['name']}\n"
+        return string
     
     def sort(self):
-        self.record = dict(sorted(self.record.items()))
+        ...
+        #self._records = dict(sorted(self._records.items()))
         return self
     
-    def sum(self):
-        return sum(self.record.values())
+    def sum_by_category(self):
+        categorized = {}
+        for month in self._records:
+            for tx in self._records[month]:
+                if month not in categorized:
+                    categorized[month] = {}
+                if tx['name'] not in categorized[month]:
+                    categorized[month][tx['name']] = 0
+                categorized[month][tx['name']] += tx['amount']
+        return categorized
+    
+    def monthly_cf_bef_inv(self):
+        categorized = self.sum_by_category()
+        sum = {}
+        for month in categorized:
+            for key, value in categorized[month].items():
+                if self._is_inv(key):
+                    ...
+                else:
+                    if month not in sum:
+                        sum[month] = {'spending': 0, 'income': 0}
+                    if value < 0:
+                        # spending
+                        sum[month]['spending'] += value
+                    else:
+                        # income
+                        sum[month]['income'] += value
+        return sum
+
+    def _is_inv(self, key):
+        return self._is_bond_inv(key)
+
+    def _is_bond_inv(self, key):
+        return re.search(r"ISSUE CODE:[A-Z][A-Z0-9]{1}[0-9]{5}[A-Z]", key)
 
 class Statement_analyzer:
     def __init__(self, filepath):
         self.filepath = filepath
-        self.bank_record = Bank_record()
+        self.bank_record = Bank_records()
 
         # setup regex
         self.tx_regex = {}
@@ -195,59 +238,43 @@ class Statement_analyzer:
     def filepath(self, filepath):
         self._filepath = filepath
 
-    def tx_reader(self):
-        """
-            convert the transaction history csv file into a list of dict
-        """
-        with open(self.filepath) as file:
-            for line in file:
-                if line.split(',')[0].strip() == 'Transaction History':
-                    break
-            
-            bank_record =[]
-            reader = csv.DictReader(file)
-            for row in reader:
-                bank_record.append({row['Transaction date'], })
-            ...
-
-    def analyze(self):
+    def reader(self):
         with open(self.filepath) as file:
             for line in file:
                 if line.split(',')[0].strip() == 'Transaction History':
                     break
            
             reader = csv.DictReader(file)
-            cat, amount = None, None
+            date, cat, amount = None, None, None
             for row in reader:
-                cat, amount = self.tx_sorter(row, cat, amount)
+                date, cat, amount = self._tx_parser(row, date, cat, amount)
             if amount:
-                self.bank_record[self.description_parser(cat)] += amount    # add the last transaction if the last row is the first row of a transaction
-            
+                self.bank_record[date.month].append({'date': date, 'name': self.description_parser(cat), 'amount': amount}) # add the last transaction if the last row is the first row of a transaction
             return self.bank_record.sort()
 
-    def tx_sorter(self, row, prev_cat=None, prev_amount=None):
-        """
-            Sort the transaction into different categories
-        """
+    def _tx_parser(self, row, prev_date=None, prev_cat=None, prev_amount=None):
         try:
             # if amount_str is not empty, then the row is the first row of a transaction
             if (amount_str := '-'+row['Withdrawals (SGD)'] if (row['Withdrawals (SGD)']) else None) or (amount_str := row['Deposits (SGD)']):
                 # Storing the first row
                 tx_category = row['Description']
                 amount = float(amount_str.replace(',',''))
+                match = re.search(r"([0-9]{2})/([0-9]{2})/([0-9]{4})", row['Transaction date']) # extract the date, month, year
+                if match:
+                    tx_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
                 # look back to previous row to see if the previous transaction has second row. 
                 # (The second row of a transaction is the row without the amount)
                 if prev_amount:
-                    self.bank_record[self.description_parser(prev_cat)] += prev_amount # if no second row, use categroy as key for the bank_record
-                return tx_category, amount
+                    self.bank_record[prev_date.month].append({'date': prev_date, 'name': self._description_parser(prev_cat), 'amount': prev_amount}) # if no second row, use categroy for the item name
+                return tx_date, tx_category, amount
             else:
                 prev_detail = row['Description']
-                self.bank_record[self.description_parser(prev_detail)] += prev_amount
-                return None, None
+                self.bank_record[prev_date.month].append({'date': prev_date, 'name': self._description_parser(prev_detail), 'amount': prev_amount}) # if has second row, use the second row for the item name
+                return None, None, None
         except ValueError:
             sys.exit("Invalid float value in the Withdrawal/Deposits column")
 
-    def description_parser(self, tx_detail):
+    def _description_parser(self, tx_detail):
         re_matches = re.search(self.tx_regex['prefix']+r"(.+?)"+self.tx_regex['suffix'], tx_detail)
         if re_matches:
             #print(re_matches.group(1))
