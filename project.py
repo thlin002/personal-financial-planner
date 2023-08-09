@@ -1,6 +1,5 @@
 import sys
 import json
-from typing import Any
 import pandas as pd
 import requests
 import re
@@ -101,7 +100,7 @@ class Book(ABC):
             print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
             
             # loop until user input the correct option
-            while not (option := input("Input 'a' to ammend, 'd' to delete, and 'exit' to end\nInput: ").strip().lower()) in ('a', 'd', 'exit'):
+            while not (option := input("Input 'a' to ammend, 'd' to delete, and 'exit' to end.\nOption: ").strip().lower()) in ('a', 'd', 'exit'):
                 pass
 
             if option == 'exit':
@@ -159,7 +158,7 @@ class Savings(Book):
             print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
             
             # loop until user input the correct option
-            while not (option := input("Update savings. Input 'a' to ammend, 'exit' to end\nInput: ").strip().lower()) in ('a', 'exit'):
+            while not (option := input("Update savings. Input 'a' to ammend, 'exit' to end.\nOption: ").strip().lower()) in ('a', 'exit'):
                 pass
 
             if option == 'exit':
