@@ -1,5 +1,6 @@
 import sys
 import json
+from typing import Any
 import pandas as pd
 import requests
 import re
@@ -9,39 +10,33 @@ from datetime import date, timedelta
 import spacy
 from spacy.matcher import Matcher
 from spacy import util
+from decimal import *
 
 def main():
     # print(get_bond_yields())
-
-    # book_onetime = onetime_book('onetime.csv')
-    # book_recurring = recurring_book('recurring.csv')
-    # book_savings = savings_book('savings.csv')
-    # book_onetime.book_writer()
-    # book_recurring.book_writer()
-    # book_savings.book_writer()
-    #print(get_bond_yields())
-    bank_records = Bank_records()
-    bank_records = Statement_analyzer("TransactionHistory_2023-Mar-Jul.csv").reader()
-    print(bank_records)
-    print(json.dumps(bank_records.sum_by_category(),indent=2))
-    print(json.dumps(bank_records.monthly_cf_bef_inv(),indent=2))
-
+    non_recurring_revenue = Non_recurring_revenue('onetime.csv')
+    recurring_revenue = Recurring_revenue('recurring.csv')
+    savings = Savings('savings.csv')
+    non_recurring_revenue.usr_book_writer()
+    recurring_revenue.usr_book_writer()
+    savings.usr_book_writer()
+    # print(get_bond_yields())
+    # bank_records = Bank_records()
+    # bank_records = Statement_analyzer("TransactionHistory_2023-Mar-Jul.csv").reader()
+    # print(bank_records)
+    # print(json.dumps(bank_records.sum_by_category(),indent=2, default=str))
+    # all_month_sum = bank_records.monthly_cf_bef_inv()
+    # print(json.dumps(all_month_sum,indent=2, default=str))
+    # avg_spending = 0
+    # for n, monthly in enumerate(all_month_sum.values()):
+    #     avg_spending += monthly['spending']
+    # avg_spending /= (n+1)
+    # print(avg_spending)
+        
+# Book and its inherited classes are used to store Future CF as opposed to Past CF defined in Bank_records, 
+# and provide a preliminary CLI for user to edit the book.
+# TODO: Implement the GUI for user to edit the book with Django
 class Book(ABC):
-    def __init__(self, col_ext: list, filepath: str):
-        self.filepath = filepath
-        self.columns = ['num'] + col_ext
-        try:
-            self.bookdata = pd.read_csv(self.filepath, index_col=0)
-        # catch FileNotFoundError and pandas.errors.EmptyDataError
-        except Exception:
-            self.bookdata = pd.DataFrame(columns=self.columns)
-
-    def __del__(self):
-        self.bookdata.to_csv(self.filepath, columns=self.columns, index_label=['name'])
-
-    def __str__(self):
-        return self.bookdata.to_string()
-
     @property
     def filepath(self):
         return self._filepath
@@ -59,89 +54,125 @@ class Book(ABC):
         self._columns = columns
 
     @property
-    def bookdata(self):
-        return self._bookdata
+    def get_col_funcs(self):
+        return self._get_col_funcs
     
-    @bookdata.setter
-    def bookdata(self, bookdata):
-        self._bookdata = bookdata
+    @get_col_funcs.setter
+    def get_col_funcs(self, get_col_funcs):
+        self._get_col_funcs = get_col_funcs
+    
+    def __init__(self, col_ext: list, filepath: str):
+        self.filepath = filepath
+        self.columns = ['num'] + col_ext
+        # could append more get_col functions to the list in the inherited class if needed
+        self.get_col_funcs = [self.get_col1, self.get_col2]
+        try:
+            # Read the csv file if it exists and set the first column as index
+            self.bookdata = pd.read_csv(self.filepath, index_col=0)
+        
+        # catch FileNotFoundError and pandas.errors.EmptyDataError
+        except Exception:
+            self.bookdata = pd.DataFrame(columns=self.columns)
 
-    def book_writer(self) -> None:
-        """
-            A interface for user to edit the book items
+    def __del__(self):
+        # Write the bookdata to the csv file, with the first column as index
+        self.bookdata.to_csv(self.filepath, columns=self.columns, index_label=['name'])
 
-            :return: A Dataframe that contains the update bookdata
-            :rtype: pandas DataFrame object
-        """
-        items = self.bookdata.to_dict()
-        print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
-        while True:
-            while not (option := input("Input 'a' to add and 'd' to delete\nInput 'exit' to end\nInput: ").strip().lower()) in ('a', 'd', 'exit'):
-                pass
-            if option == 'exit':
-                break
+    def __str__(self):
+        return self.bookdata.to_string()
 
-            if (name := input("Name (No space char allowed): ").strip().lower()).isalnum():
-                match option:
-                    case "a":
-                        items[self.columns[0]][name] = self.get_col1()
-                        items[self.columns[1]][name] = self.get_col2()
-                    case "d":
-                        try:
-                            items[self.columns[0]].pop(name)
-                            items[self.columns[1]].pop(name)
-                        except KeyError:
-                            print("Item doesn't exist")
-            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
-            
-        self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
-
-    def get_col1(self) -> float:
-        while True:
-            try:
-                num = float(input("Number (Negative for expense or debt): "))
-                break
-            except ValueError:
-                print("Invalid floating point number")
-        return num
+    def get_col1(self) -> Decimal:
+        return Decimal(input("Amount, Input negative num for expense/debt: "))
 
     @abstractmethod
     def get_col2(self):
         pass
 
-class Onetime_book(Book):
+    def usr_book_writer(self) -> None:
+        """
+            A CLI interface for user to edit the book items
+
+            :return: A Dataframe that contains the update bookdata
+            :rtype: pandas DataFrame object
+        """
+        # items is a dict of dict converted from the bookdata, which is a DataFrame
+        items = self.bookdata.to_dict()
+        while True:
+            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
+            
+            # loop until user input the correct option
+            while not (option := input("Input 'a' to ammend, 'd' to delete, and 'exit' to end\nInput: ").strip().lower()) in ('a', 'd', 'exit'):
+                pass
+
+            if option == 'exit':
+                break
+            
+            if (name := input("Name (No space allowed): ").strip().lower()).isalnum():
+                match option:
+                    case "a":
+                        self.usr_write_row(items, name)
+                    case "d":
+                        self.usr_delete_row(items, name) 
+            
+        self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
+
+    def usr_write_row(self, items: dict, name: str) -> None:
+        for i, col in enumerate(self.columns):
+            while True:
+                try:
+                    items[col][name] = self.get_col_funcs[i]()
+                    break
+                except Exception:
+                    print("Invalid input")
+
+    def usr_delete_row(self, items: dict, name: str) -> None:
+        for col in self.columns:
+            try:
+                items[col].pop(name)
+            except KeyError:
+                print("Item doesn't exist")
+
+class Non_recurring_revenue(Book):
     def __init__(self, filepath: str):
         super().__init__(['date',], filepath)
-    
+        
     def get_col2(self) -> date:
-        while True:
-            try:
-                d = date.fromisoformat(input("Date YYYY-MM-DD: "))
-                break
-            except ValueError:
-                print("Invalid date format")   
-        return d
+        return date.fromisoformat(input("Date YYYY-MM-DD: "))
 
-class Recurring_book(Book):
+class Recurring_revenue(Book):
     def __init__(self, filepath: str):
         super().__init__(['freq',], filepath)
     
     def get_col2(self) -> timedelta:
-        while True:
-            try:
-                d = timedelta(days=int(input("Frequency(days): ")))
-                break
-            except ValueError:
-                print("Invalid date format")   
-        return d
+        return timedelta(days=float(input("Frequency(days): ")))
+    
+    def update_avg_spending(self, avg_spending: Decimal) -> None:
+        ...
 
-class Savings_book(Book):
+class Savings(Book):
     def __init__(self, filepath: str):
         super().__init__(['rainy-day-fund',], filepath)
     
-    def get_col2(self) -> float:
-        print("Rainy day fund, ", end='')
-        return self.get_col1()
+    def usr_book_writer(self) -> None:
+        items = self.bookdata.to_dict()
+        while True:
+            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
+            
+            # loop until user input the correct option
+            while not (option := input("Update savings. Input 'a' to ammend, 'exit' to end\nInput: ").strip().lower()) in ('a', 'exit'):
+                pass
+
+            if option == 'exit':
+                    break
+            self.usr_write_row(items, 'savings')
+            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
+
+        self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
+
+    def get_col2(self) -> Decimal:
+        return Decimal(input("Rainy day fund: "))
+
+# end of Book and its inherited classes
 
 class Bank_records:
     def __init__(self):
@@ -166,7 +197,7 @@ class Bank_records:
             for tx in self._records[month]:
                 string += f"month: {month:<2} date: {tx['date'].isoformat():<12} amount: {tx['amount']:<15} name: {tx['name']}\n"
         return string
-    
+
     def sort(self):
         ...
         #self._records = dict(sorted(self._records.items()))
@@ -181,25 +212,39 @@ class Bank_records:
                 if tx['name'] not in categorized[month]:
                     categorized[month][tx['name']] = 0
                 categorized[month][tx['name']] += tx['amount']
+            # sort the dict by key
+            categorized[month] = dict(sorted(categorized[month].items()))
         return categorized
     
-    def monthly_cf_bef_inv(self):
+    def monthly_cf_bef_inv(self) -> tuple:
         categorized = self.sum_by_category()
-        sum = {}
-        for month in categorized:
+        sum_by_month = {}
+        avg_monthly_spending = 0
+        avg_monthly_income = 0
+
+        for n, month in enumerate(categorized):
             for key, value in categorized[month].items():
                 if self._is_inv(key):
+                    # to be implemented
                     ...
                 else:
-                    if month not in sum:
-                        sum[month] = {'spending': 0, 'income': 0}
+                    if month not in sum_by_month:
+                        sum_by_month[month] = {'spending': 0, 'income': 0}
                     if value < 0:
                         # spending
-                        sum[month]['spending'] += value
+                        sum_by_month[month]['spending'] += value
                     else:
                         # income
-                        sum[month]['income'] += value
-        return sum
+                        sum_by_month[month]['income'] += value
+            # for calculating the average spending and income
+            avg_monthly_spending += sum_by_month[month]['spending']
+            avg_monthly_income += sum_by_month[month]['income']
+        
+        avg_monthly_spending /= (n+1)
+        avg_monthly_income /= (n+1)
+
+        # return tuple(Decimal, Decimal, dict of dict)
+        return avg_monthly_spending, avg_monthly_income, sum_by_month
 
     def _is_inv(self, key):
         return self._is_bond_inv(key)
@@ -208,6 +253,14 @@ class Bank_records:
         return re.search(r"ISSUE CODE:[A-Z][A-Z0-9]{1}[0-9]{5}[A-Z]", key)
 
 class Statement_analyzer:
+    @property
+    def filepath(self):
+        return self._filepath
+    
+    @filepath.setter
+    def filepath(self, filepath):
+        self._filepath = filepath
+    
     def __init__(self, filepath):
         self.filepath = filepath
         self.bank_record = Bank_records()
@@ -229,14 +282,6 @@ class Statement_analyzer:
         #item_patterns = [[{"POS": "ADJ", "OP": "*"}, {"POS": {"IN": ["NOUN", "PROPN"]}, "OP": "+"}]]
         item_patterns = [[{"ENT_TYPE": {"NOT_IN": ["LAW", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL", "CARDINAL"]}, "OP": "+"}]]
         self.matcher.add("ITEM_PATTERN", item_patterns)
-        
-    @property
-    def filepath(self):
-        return self._filepath
-    
-    @filepath.setter
-    def filepath(self, filepath):
-        self._filepath = filepath
 
     def reader(self):
         with open(self.filepath) as file:
@@ -258,7 +303,7 @@ class Statement_analyzer:
             if (amount_str := '-'+row['Withdrawals (SGD)'] if (row['Withdrawals (SGD)']) else None) or (amount_str := row['Deposits (SGD)']):
                 # Storing the first row
                 tx_category = row['Description']
-                amount = float(amount_str.replace(',',''))
+                amount = Decimal(amount_str.replace(',',''))
                 match = re.search(r"([0-9]{2})/([0-9]{2})/([0-9]{4})", row['Transaction date']) # extract the date, month, year
                 if match:
                     tx_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
@@ -288,7 +333,6 @@ class Statement_analyzer:
         if (item := item_name.strip()) == "":
             sys.exit("No item name found")
         return item
-
 
 def get_bond_yields():
     base_url = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service'
