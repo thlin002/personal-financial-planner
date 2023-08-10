@@ -59,9 +59,10 @@ class Book(ABC):
     @get_col_funcs.setter
     def get_col_funcs(self, get_col_funcs):
         self._get_col_funcs = get_col_funcs
-    
+
     def __init__(self, col_ext: list, filepath: str):
         self.filepath = filepath
+        self._options = ('a', 'u', 'd', 'exit')
         self.columns = ['num'] + col_ext
         # could append more get_col functions to the list in the inherited class if needed
         self.get_col_funcs = [self.get_col1, self.get_col2]
@@ -88,34 +89,38 @@ class Book(ABC):
         pass
 
     def usr_book_writer(self) -> None:
-        """
-            A CLI interface for user to edit the book items
-
-            :return: A Dataframe that contains the update bookdata
-            :rtype: pandas DataFrame object
-        """
         # items is a dict of dict converted from the bookdata, which is a DataFrame
         items = self.bookdata.to_dict()
         while True:
             print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
             
             # loop until user input the correct option
-            while not (option := input("Input 'a' to ammend, 'd' to delete, and 'exit' to end.\nOption: ").strip().lower()) in ('a', 'd', 'exit'):
+            while not (option := input(f"Input 'a' to add, 'u' to update, 'd' to delete, and 'exit' to end.\nAvailable options {self._options}, Option: ").strip().lower()) in self._options:
                 pass
 
             if option == 'exit':
                 break
             
             if (name := input("Name (No space allowed): ").strip().lower()).isalnum():
-                match option:
-                    case "a":
-                        self.usr_write_row(items, name)
-                    case "d":
-                        self.usr_delete_row(items, name) 
+                try:
+                    match option:
+                        case "a":
+                            self.usr_write_row(items, name, 'a')
+                        case "u":
+                            self.usr_write_row(items, name, 'u')
+                        case "d":
+                            self.usr_delete_row(items, name) 
+                except KeyError as e:
+                    print(e, end=', try again\n\n')
             
         self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
 
-    def usr_write_row(self, items: dict, name: str) -> None:
+    def usr_write_row(self, items: dict, name: str, option: str) -> None:
+        if name not in items[self.columns[1]] and option == 'u':
+            raise KeyError("Item doesn't exist")
+        elif name in items[self.columns[1]] and option == 'a':
+            raise KeyError("Item already exists")
+        
         for i, col in enumerate(self.columns):
             while True:
                 try:
@@ -126,10 +131,7 @@ class Book(ABC):
 
     def usr_delete_row(self, items: dict, name: str) -> None:
         for col in self.columns:
-            try:
-                items[col].pop(name)
-            except KeyError:
-                print("Item doesn't exist")
+            items[col].pop(name)
 
 class Non_recurring_revenue(Book):
     def __init__(self, filepath: str):
@@ -141,6 +143,8 @@ class Non_recurring_revenue(Book):
 class Recurring_revenue(Book):
     def __init__(self, filepath: str):
         super().__init__(['freq',], filepath)
+        self._options = ('u', 'd', 'exit')
+        # initialize the income and spendings to 0 if the csv file is empty
     
     def get_col2(self) -> timedelta:
         return timedelta(days=float(input("Frequency(days): ")))
@@ -151,22 +155,24 @@ class Recurring_revenue(Book):
 class Savings(Book):
     def __init__(self, filepath: str):
         super().__init__(['rainy-day-fund',], filepath)
+        self._options = ('u', 'd', 'exit')
+        # initialize the savings to 0 if the csv file is empty
     
-    def usr_book_writer(self) -> None:
-        items = self.bookdata.to_dict()
-        while True:
-            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
+    # def usr_book_writer(self) -> None:
+    #     items = self.bookdata.to_dict()
+    #     while True:
+    #         print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
             
-            # loop until user input the correct option
-            while not (option := input("Update savings. Input 'a' to ammend, 'exit' to end.\nOption: ").strip().lower()) in ('a', 'exit'):
-                pass
+    #         # loop until user input the correct option
+    #         while not (option := input("Update savings. Input 'a' to amend, 'exit' to end.\nOption: ").strip().lower()) in ('a', 'exit'):
+    #             pass
 
-            if option == 'exit':
-                    break
-            self.usr_write_row(items, 'savings')
-            print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
+    #         if option == 'exit':
+    #                 break
+    #         self.usr_write_row(items, 'savings')
+    #         print(pd.DataFrame.from_records(items, columns=self.columns), end='\n\n')
 
-        self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
+    #     self.bookdata = pd.DataFrame.from_records(items, columns=self.columns)
 
     def get_col2(self) -> Decimal:
         return Decimal(input("Rainy day fund: "))
