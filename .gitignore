@@ -1,8 +1,12 @@
 # Ignore macOS generated files
 .DS_Store
 
-#  Ignore project specific files
+#  Ignore project data files
 *.csv
+*.xlsx
+
+# Ignore virtual environment folder
+.myvenv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
