@@ -2,153 +2,90 @@ from datetime import date, timedelta
 import pandas as pd
 from decimal import *
 from abc import ABC, abstractmethod
+import sys
 import re
-
+import csv
+import sqlite3
 
 # Book and its inherited classes are used to store Future CF as opposed to Past CF defined in Bank_records, 
-# and provide a preliminary CLI for user to edit the book.
-# TODO: Implement the GUI for user to edit the book with Django
-class Book(ABC):
+class Table(ABC):
+    sheet_cols = {}
+
     @property
     def filepath(self):
         return self._filepath
     
     @filepath.setter
     def filepath(self, filepath):
+        # might need to add some checking method for filepath format.
         self._filepath = filepath
-
-    @property
-    def columns(self):
-        return self._columns
-    
-    @columns.setter
-    def columns(self, columns):
-        self._columns = columns
-
-    @property
-    def get_col_funcs(self):
-        return self._get_col_funcs
-    
-    @get_col_funcs.setter
-    def get_col_funcs(self, get_col_funcs):
-        self._get_col_funcs = get_col_funcs
 
     def __init__(self, filepath: str):
         self.filepath = filepath
-        self._options = ['u', 'exit']
-        # Inherited class could append more get_col functions to the list in the inherited class if needed
-        self.get_col_funcs = [self.get_col1, self.get_col2]
-        # Read the csv file if it exists and set the first column as index
-        self.bookdf = pd.read_csv(self.filepath, index_col=0)
-            
+        self.df = pd.read_excel(pd.ExcelFile(self.filepath), index_col=False, sheet_name=list(self.sheet_cols.keys()))
+
+    def create_missing_sheets(self, writer, sheet_name, cols):
+        for sheet_name in self.sheet_cols:  
+            if not sheet_name in self.df:
+                # create a new empty sheet
+                with pd.ExcelWriter(self.filepath) as writer:
+                    Future_CF.create_new_sheet(writer, sheet_name, self.sheet_cols[sheet_name]) 
+
+    # static method, no 'self' argument
+    def create_new_sheet(writer, sheet_name, cols):
+        pd.DataFrame(columns=cols).to_excel(writer, sheet_name)
+
     def __del__(self):
-        # Write the bookdf to the csv file, with the first column as index
-        self.bookdf.to_csv(self.filepath)
-
-    def __str__(self):
-        return self.bookdf.to_string()
-
-    def get_col1(self) -> Decimal:
-        return Decimal(input("Amount, negative for expense/debt: "))
-
-    @abstractmethod
-    def get_col2(self):
         pass
 
-    def init_bookdf(self):
-        self.bookdf = pd.DataFrame(columns=self.columns)
+    def __str__(self):
+        pass
 
-    def usr_book_writer(self) -> None:
-        # items is a dict of dict converted from the bookdf, which is a DataFrame
-        while True:
-            print(self.bookdf, end='\n\n')
-
-            # loop until user input the correct option
-            while not (option := input(f"Input 'a' to add, 'u' to update, 'd' to delete, and 'exit' to end.\nAvailable options {self._options}, Option: ").strip().lower()) in self._options:
-                pass
-
-            if option == 'exit':
-                break
-            
-            if (name := input("Name: ").strip().lower()).isprintable():
-                try:
-                    match option:
-                        case "a":
-                            # construct a new row from the user input 
-                            data = {name: [func() for func in self.get_col_funcs]}
-                            new_row = pd.DataFrame.from_dict(data, orient='index', columns=self.columns)
-                            # append the new row to the bookdf
-                            self.bookdf = pd.concat([self.bookdf, new_row], verify_integrity=True)
-                        case "u":
-                            # if the name is in the index, update the row
-                            if name in self.bookdf.index:
-                                self.bookdf.loc[name] = [func() for func in self.get_col_funcs]
-                        case "d":
-                            self.bookdf.drop(name, inplace=True)
-                except KeyError as e:
-                    print(e, end=', try again\n\n')
-                except ValueError as e:
-                    print(e, end=', try again\n\n')
-                except InvalidOperation as e:
-                    print(e, end=', try again\n\n')
-
-class Non_recurring_CF(Book):
+class Future_CF(Table):
+    sheet_cols = {
+                'one_time_expense': ['name', 'amount', 'date'],
+                'recurring_expense': ['name', 'amount', 'period'],
+                'one_time_income': ['name', 'amount', 'date'],
+                'recurring_income': ['name', 'amount', 'period']
+    }
     def __init__(self, filepath: str):
-        self.columns = ['amount', 'date']
         try:
+            # read the xls file as self.xls and store it into pandas dataframe self.df
             super().__init__(filepath)
-            self._options += ['a', 'd']
+            with pd.ExcelWriter(filepath, mode='a') as writer:
+                for sheet_name in self.sheet_cols:  
+                    if not sheet_name in self.df:
+                        print(f'Sheet {sheet_name} not found...')
+                        print(f'Create new sheet...')
+                        # create a new empty sheet
+                        Future_CF.create_new_sheet(writer, sheet_name, self.sheet_cols[sheet_name]) 
         except FileNotFoundError:
-            self.init_bookdf()
-        
-    def get_col2(self) -> date:
-        return date.fromisoformat(input("Date YYYY-MM-DD: "))
+            # create a new empty Future_cashflows excel file
+            with pd.ExcelFile(self.filepath) as writer:
+                for sheet_name in self.sheet_cols:
+                    Future_CF.create_new_sheet(writer, sheet_name, self.sheet_cols[sheet_name])
+            print(f'File {self.filepath} not found...')
+            print('Create new file...')
+            print('Ending the program...')
+            sys.exit()
 
-class Recurring_CF(Book):
-    def __init__(self, filepath: str, spending = Decimal(0), income = Decimal(0)):
-        self.columns = ['amount', 'freq']
-        try:
-            super().__init__(filepath)
-        except FileNotFoundError:
-            self.init_bookdf(spending, income)
-    
-    def update(self, spending:  Decimal, income: Decimal):
-        ...
-        #self.bookdf.loc['spending'] = spending
-        #self.bookdf.loc['income'] = income
-
-    def get_col2(self) -> timedelta:
-        matches = re.search(r"([0-9]+)/([0-9]+)/([0-9]+)", int(input("Years/Month/Days").strip()))
-        years, months, days = matches.group(1), matches.group(2), matches.group(3)
-        return pd.DateOffset(years=years, months=months, days=days)
-    
-    def init_bookdf(self, spending: Decimal, income: Decimal):
-        data = {
-            'spending': [spending, pd.DateOffset(months=1)],
-            'income': [income, pd.DateOffset(months=1)]
-            }
-        self.bookdf = pd.DataFrame.from_dict(data, orient='index', columns=self.columns)
-        print(self.bookdf)
-
-    def update_spending(self, spending: Decimal) -> None:
-        self.bookdf.loc["spending"] = spending
-
-class Savings(Book):
+class Capital(Table):
+    sheet_cols = {
+            'current_deposit': ['account', 'amount'],
+            'time_deposit': ['account', 'amount', 'date_of_maturity'],
+            'bonds': ['account', 'amount', 'date_of_maturity'],
+            'stocks': ['account', 'amount']
+    }
     def __init__(self, filepath: str, savings = Decimal(0), min_thresh = Decimal(0)):
-        self.columns = ['savings', 'min_thresh']
         try:
             super().__init__(filepath)
+            for sheet_name in self.sheet_cols:  
+                if not sheet_name in self.df:
+                    # create a new empty sheet
+                    with pd.ExcelWriter(filepath) as writer:
+                        Future_CF.create_new_sheet(writer, sheet_name, self.sheet_cols[sheet_name]) 
         except FileNotFoundError:
-            self.init_bookdf(savings, min_thresh)
-    
-    def init_bookdf(self, savings: Decimal, min_thresh: Decimal):
-        data = {
-            'savings': [savings, min_thresh]
-            }
-        self.bookdf = pd.DataFrame.from_dict(data, orient='index', columns=self.columns)
-        print(self.bookdf)
-
-    def get_col2(self) -> Decimal:
-        return Decimal(input("Min threshold: "))
+            with pd.ExcelFile(self.filepath) as writer:
+                Future_CF.create_new_sheet(writer, sheet_name, self.sheet_cols[sheet_name])
 
 # end of Book and its inherited classes
